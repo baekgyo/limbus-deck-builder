@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>림버스 컴퍼니 덱 빌더</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- pako 라이브러리 (덱 코드 압축용) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+    
+    <!-- 파이어베이스 SDK (v9 compat 모드) -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+</head>
+<body>
+
+    <!-- 1. 상단 네비게이션 바 -->
+    <header class="navbar">
+        <div class="nav-left">
+            <h1 class="logo" onclick="showSection('home-screen')">림버스 덱빌더</h1>
+            <nav class="nav-menu">
+                <button onclick="showSection('community-screen')">공유된 덱 보기</button>
+                <button onclick="showSection('random-screen')">랜덤 뽑기</button>
+                <button onclick="showSection('deck-share-screen')">덱 커스텀 및 공유</button>
+            </nav>
+        </div>
+        
+        <!-- 우측 상단 노래 (볼륨 조절) - main_bgm.mp3 연결 -->
+        <div class="nav-right audio-player">
+            <button id="mute-btn">🔊 ON</button>
+            <input type="range" id="volume-slider" min="0" max="1" step="0.1" value="0.5">
+            <audio id="bgm" src="main_bgm.mp3" loop></audio>
+        </div>
+    </header>
+
+    <!-- 2. 메인 홈 화면 -->
+    <section id="home-screen" class="page-section">
+        <div class="home-hero">
+            
+            <!-- 메인 신규 업데이트 배너 -->
+            <div class="update-banner" style="background-image: linear-gradient(rgba(0,0,0,0.3), rgba(0,0,0,0.7)), url('images/banner/sank_honglu.png');">
+                <div class="banner-content">
+                    <h2 class="banner-title">[의뢰]의 초과 예약은 금지되어 있어서요~</h2>
+                    <p class="banner-desc">동부 생크 협회 3과 홍루 추가</p>
+                </div>
+            </div>
+
+            <p class="sub-title">원하는 기능으로 바로 이동하세요</p>
+            
+            <!-- 3가지 카드 컨테이너 배치 -->
+            <div class="card-container three-cards">
+                <div class="menu-card" onclick="showSection('community-screen')">
+                    <div class="card-icon">📚</div>
+                    <h2>공유된 덱 보기</h2>
+                    <p>다른 유저들이 올린 최신/인기 덱 조합을 둘러봅니다.</p>
+                </div>
+
+                <div class="menu-card" onclick="showSection('random-screen')">
+                    <div class="card-icon">🎰</div>
+                    <h2>랜덤 뽑기 바로가기</h2>
+                    <p>랜덤으로 인격과 에고를 뽑아 덱을 생성합니다.</p>
+                </div>
+
+                <div class="menu-card" onclick="showSection('deck-share-screen')">
+                    <div class="card-icon">🎴</div>
+                    <h2>덱 커스텀 및 공유</h2>
+                    <p>나만의 12인 덱을 커스텀하고 덱 코드로 공유해보세요.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 3. 공유된 덱 보기 화면 -->
+    <section id="community-screen" class="page-section hidden">
+        <div class="container">
+            <button class="back-btn" onclick="showSection('home-screen')">← 메인으로 돌아가기</button>
+            
+            <div class="community-header" style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0 16px 0;">
+                <h2>공유된 덱 목록</h2>
+                <span id="community-status" style="font-size: 0.85rem; color: #71717a;">파이어베이스 연동 완료</span>
+            </div>
+
+            <div id="community-deck-list" style="display: flex; flex-direction: column; gap: 12px;"></div>
+        </div>
+    </section>
+
+    <!-- 4. 랜덤 뽑기 화면 -->
+    <section id="random-screen" class="page-section hidden">
+        <div class="container">
+            <button class="back-btn" onclick="showSection('home-screen')">← 메인으로 돌아가기</button>
+            
+            <div class="title-group">
+                <h2>랜덤 인격/에고 추출기</h2>
+            </div>
+            
+            <div class="controls">
+                <div class="filter-group">
+                    <button id="filter-all" class="active">전체 인격</button>
+                    <button id="filter-3star">3성 전용</button>
+                </div>
+                
+                <button id="spin-all-btn" class="spin-highlight-btn">✨ 전체 추출 ✨</button>
+                <button id="copy-deck-btn" class="copy-btn" style="display:none;">📋 덱 코드 복사</button>
+            </div>
+
+            <div id="deck-analysis-card" class="analysis-card hidden">
+                <h3>📊 추출된 덱 키워드 분석 <span class="sub-hint">(키워드를 클릭하면 하이라이트됩니다)</span></h3>
+                <div class="analysis-content">
+                    <div class="analysis-item">
+                        <span class="label">주요 시너지:</span>
+                        <div id="top-keywords" class="keyword-tags"></div>
+                    </div>
+                    <div class="analysis-item">
+                        <span class="label">인격 구성:</span>
+                        <span id="rank-summary" class="summary-text">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="sinner-grid" class="grid-container"></div>
+        </div>
+    </section>
+
+    <!-- 5. 덱 커스텀 및 공유 화면 -->
+    <section id="deck-share-screen" class="page-section hidden">
+        <div class="container">
+            <button class="back-btn" onclick="showSection('home-screen')">← 메인으로 돌아가기</button>
+            
+            <h2>덱 커스텀 및 공유</h2>
+            <p style="color: #aaa; margin-bottom: 20px;">원하는 인격과 E.G.O를 직접 장착하여 나만의 덱을 만들고 공유해보세요.</p>
+
+            <h3 style="margin-bottom: 8px;">덱 정보 입력</h3>
+
+            <div class="deck-meta-card">
+                <div class="meta-row" style="margin-bottom: 12px; align-items: center; border-bottom: 1px solid #2a2e3d; padding-bottom: 12px; justify-content: space-between;">
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <label style="font-weight: bold; color: #fff; min-width: 50px;">난이도</label>
+                        <div class="difficulty-selector" style="display: flex; gap: 20px;">
+                            <label style="cursor: pointer; display: flex; align-items: center; gap: 5px; color: #4ade80; font-size: 0.9rem; font-weight: bold;">
+                                <input type="radio" name="deck-difficulty" value="NORMAL" checked style="accent-color: #4ade80;"> Normal
+                            </label>
+                            <label style="cursor: pointer; display: flex; align-items: center; gap: 5px; color: #facc15; font-size: 0.9rem; font-weight: bold;">
+                                <input type="radio" name="deck-difficulty" value="HARD" style="accent-color: #facc15;"> Hard
+                            </label>
+                            <label style="cursor: pointer; display: flex; align-items: center; gap: 5px; color: #f87171; font-size: 0.9rem; font-weight: bold;">
+                                <input type="radio" name="deck-difficulty" value="EXTREME" style="accent-color: #f87171;"> Extreme
+                            </label>
+                        </div>
+                    </div>
+                    <button id="custom-share-btn" class="share-top-btn">📋 공유하기 및 DB 저장</button>
+                </div>
+
+                <div class="meta-row">
+                    <div class="meta-field">
+                        <label>덱 제목</label>
+                        <input type="text" id="custom-deck-title" placeholder="덱 이름을 입력하세요">
+                    </div>
+                    <div class="meta-field">
+                        <label>작성자</label>
+                        <input type="text" id="custom-author" placeholder="닉네임">
+                    </div>
+                </div>
+                <div class="meta-field full-width">
+                    <label>덱 설명 및 운영법</label>
+                    <textarea id="custom-desc" placeholder="덱의 특징을 적어주세요."></textarea>
+                </div>
+            </div>
+
+            <div id="custom-analysis-card" class="analysis-card">
+                <h3>📊 커스텀 덱 키워드 분석</h3>
+                <div class="analysis-content">
+                    <div class="analysis-item">
+                        <span class="label">주요 시너지:</span>
+                        <div id="custom-top-keywords" class="keyword-tags"></div>
+                    </div>
+                    <div class="analysis-item">
+                        <span class="label">인격 구성:</span>
+                        <span id="custom-rank-summary" class="summary-text">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="custom-sinner-grid" class="grid-container"></div>
+        </div>
+    </section>
+
+    <!-- 6. 장착 에고 모달 팝업 -->
+    <div id="ego-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="ego-sinner-name">수감자 장착 에고</h3>
+                <button class="modal-close-btn" onclick="closeEgoModal()">✕</button>
+            </div>
+            <div id="ego-content" class="ego-list"></div>
+        </div>
+    </div>
+
+    <!-- 7. 커스텀 인격/에고 선택 팝업 모달 -->
+    <div id="custom-select-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content large-modal">
+            <div class="modal-header">
+                <h3 id="select-modal-title">수감자 인격 / E.G.O 선택</h3>
+                <button class="modal-close-btn" onclick="closeCustomModal()">✕</button>
+            </div>
+            <div class="select-tabs">
+                <button id="tab-identity" class="active" onclick="switchCustomTab('identity')">인격 변경</button>
+                <button id="tab-ego" onclick="switchCustomTab('ego')">E.G.O 장착</button>
+            </div>
+            <div id="select-modal-body" class="select-body"></div>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <p>본 사이트는 팬 메이드 프로젝트이며, 모든 게임 리소스의 권리는 Project Moon에 있습니다.</p>
+    </footer>
+
+    <script src="sinners.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
