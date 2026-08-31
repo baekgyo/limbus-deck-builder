@@ -159,6 +159,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     return state && state.identity ? state.identity : null;
                 });
 
+                const deckFixedEgos = {};
+                sinners.forEach(s => {
+                    const state = customDeckState[s.id];
+                    deckFixedEgos[s.id] = {
+                        egos: state && state.egos ? state.egos : ["-", "-", "-", "-", "-"]
+                    };
+                });
+
                 const thumbnails = sinners.map(s => {
                     const state = customDeckState[s.id];
                     if (!state || !state.identity) return { name: '', imgUrl: '' };
@@ -175,6 +183,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     tags: [selectedDifficulty],
                     deckCode: deckCode,
                     deckIdentities: deckIdentities,
+                    fixedEgos: deckFixedEgos,
                     thumbnails: thumbnails,
                     views: 0,
                     date: new Date().toISOString().slice(0, 10).replace(/-/g, '. ') + '.'
@@ -518,7 +527,6 @@ function generateRawBitString() {
         let startBit = i * 46; 
 
         let foundIdentity = null;
-
         const isCustomScreen = !document.getElementById('deck-share-screen').classList.contains('hidden');
 
         if (isCustomScreen && typeof customDeckState !== 'undefined' && customDeckState[s.id] && customDeckState[s.id].identity) {
@@ -539,7 +547,13 @@ function generateRawBitString() {
 
         setBits(totalBits, startBit + 8, startBit + 11, i + 1);
 
-        const egoSet = typeof fixedEgos !== 'undefined' ? fixedEgos[s.id] : null;
+        let egoSet = null;
+        if (isCustomScreen && typeof customDeckState !== 'undefined' && customDeckState[s.id] && customDeckState[s.id].egos) {
+            egoSet = customDeckState[s.id].egos;
+        } else if (typeof fixedEgos !== 'undefined') {
+            egoSet = fixedEgos[s.id];
+        }
+
         const egoData = typeof sinnerEgoList !== 'undefined' ? sinnerEgoList[i] : null;
 
         if (egoSet && egoData) {
@@ -884,11 +898,10 @@ function toggleCustomKeywordFilter(kw) {
 }
 
 // -------------------------------------------------------------
-// -------------------------------------------------------------
-// [8. 공유된 덱 보기(커뮤니티) - 페이지네이션 & 조회수 증가 적용 버전]
+// [8. 공유된 덱 보기(커뮤니티) - 각 인격 카드 클릭 시 E.G.O 모달 연동 버전]
 // -------------------------------------------------------------
 let currentCommunityPage = 1;
-const decksPerPage = 5; // 한 페이지에 5개씩 표시
+const decksPerPage = 5; 
 let cachedCommunityDecks = []; 
 
 function loadCommunityDecks() {
@@ -915,7 +928,6 @@ function loadCommunityDecks() {
         });
 }
 
-// 특정 덱의 조회수를 1 증가시키는 함수
 async function incrementDeckView(deckId) {
     if (!deckId) return;
     try {
@@ -926,7 +938,6 @@ async function incrementDeckView(deckId) {
             const newViews = (doc.data().views || 0) + 1;
             transaction.update(deckRef, { views: newViews });
             
-            // 캐시 데이터도 동기화
             const cached = cachedCommunityDecks.find(d => d.id === deckId);
             if (cached) cached.views = newViews;
         });
@@ -1004,20 +1015,15 @@ function renderCommunityPage() {
             overflow: hidden; 
             font-size: 0.75rem; 
             color: #d4d4d8; 
-            cursor: pointer; 
             display: flex;
             flex-direction: column;
             justify-content: center;
         `;
         
         middleDesc.innerHTML = `
-            <div style="font-size: 0.65rem; color: #71717a; margin-bottom: 4px;">설명 (클릭하여 보기)</div>
+            <div style="font-size: 0.65rem; color: #71717a; margin-bottom: 4px;">덱 설명</div>
             <div style="white-space: pre-wrap; overflow: hidden; text-overflow: ellipsis; color: #a1a1aa; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;">${deck.description || '설명이 없습니다.'}</div>
         `;
-
-        middleDesc.onclick = () => {
-            showDescriptionModal(deck.title, deck.description);
-        };
 
         const rightThumbnails = document.createElement('div');
         rightThumbnails.style.cssText = `display: grid; grid-template-columns: repeat(6, 1fr); grid-template-rows: repeat(2, 1fr); gap: 6px; flex: 1; align-self: stretch;`;
@@ -1026,7 +1032,8 @@ function renderCommunityPage() {
         for (let i = 0; i < 12; i++) {
             const thumbObj = thumbnails[i];
             const cell = document.createElement('div');
-            cell.style.cssText = `background: #090a0f; border: 1px solid #27272a; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative; min-height: 58px;`;
+            cell.style.cssText = `background: #090a0f; border: 1px solid #27272a; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative; min-height: 58px; cursor: pointer; transition: border-color 0.2s;`;
+            cell.title = "클릭하여 장착 E.G.O 확인";
             
             if (thumbObj && thumbObj.imgUrl) {
                 cell.innerHTML = `
@@ -1036,6 +1043,12 @@ function renderCommunityPage() {
             } else {
                 cell.innerHTML = `<span style="font-size: 0.7rem; color: #3f3f46;">${i + 1}</span>`;
             }
+
+            // 각 썸네일(인격 카드)을 클릭했을 때 해당 수감자의 E.G.O 정보 모달 오픈
+            cell.onclick = () => {
+                showSingleSinnerEgoModal(deck, i);
+            };
+
             rightThumbnails.appendChild(cell);
         }
 
@@ -1067,11 +1080,9 @@ function renderCommunityPage() {
                 }
                 
                 if (codeToCopy) {
-                    // 조회수 증가 실행
                     await incrementDeckView(deck.id);
                     deck.views = (deck.views || 0) + 1;
                     
-                    // 화면 상의 조회수 즉시 갱신
                     const viewCountElem = document.getElementById(`view-count-${deck.id}`);
                     if (viewCountElem) {
                         viewCountElem.innerHTML = `<span>👁️ ${deck.views}</span><span>📅 ${deck.date || '2026. 08. 29.'}</span>`;
@@ -1170,36 +1181,71 @@ function renderCommunityPage() {
     }
 }
 
-function showDescriptionModal(title, description) {
-    let modal = document.getElementById('desc-popup-modal');
+// 개별 인격 카드 클릭 시 해당 수감자의 E.G.O 정보를 보여주는 모달 함수
+// 개별 인격 카드 클릭 시 해당 수감자의 E.G.O 정보를 보여주는 모달 함수
+function showSingleSinnerEgoModal(deck, sinnerIndex) {
+    let modal = document.getElementById('deck-detail-modal');
     if (!modal) {
         modal = document.createElement('div');
-        modal.id = 'desc-popup-modal';
+        modal.id = 'deck-detail-modal';
         modal.style.cssText = `
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background-color: rgba(0, 0, 0, 0.7); display: flex;
+            background-color: rgba(0, 0, 0, 0.75); display: flex;
             justify-content: center; align-items: center; z-index: 2000;
         `;
         modal.innerHTML = `
-            <div style="background-color: #1e1e1e; border: 1px solid #444; border-radius: 8px; width: 400px; max-width: 90%; padding: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.8);">
+            <div style="background-color: #1e1e1e; border: 1px solid #444; border-radius: 8px; width: 400px; max-width: 95%; max-height: 85vh; display: flex; flex-direction: column; padding: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.8);">
                 <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 12px;">
-                    <h3 id="popup-deck-title" style="font-size: 16px; color: #fff;">설명</h3>
-                    <button id="popup-close-btn" style="background: none; border: none; color: #aaa; font-size: 18px; cursor: pointer;">✕</button>
+                    <h3 id="detail-modal-title" style="font-size: 16px; color: #fff; margin:0;">수감자 E.G.O 정보</h3>
+                    <button id="detail-close-btn" style="background: none; border: none; color: #aaa; font-size: 18px; cursor: pointer;">✕</button>
                 </div>
-                <div id="popup-deck-desc" style="font-size: 13px; color: #ccc; line-height: 1.5; max-height: 250px; overflow-y: auto; white-space: pre-wrap;"></div>
+                <div style="overflow-y: auto; flex: 1; padding-right: 4px;">
+                    <div id="detail-sinner-identity-name" style="font-size: 14px; font-weight: bold; color: #ffc400; margin-bottom: 12px;"></div>
+                    <div id="detail-modal-egos" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                </div>
             </div>
         `;
         document.body.appendChild(modal);
 
-        modal.querySelector('#popup-close-btn').onclick = () => {
-            modal.style.display = 'none';
-        };
-        modal.onclick = (e) => {
-            if (e.target === modal) modal.style.display = 'none';
-        };
+        modal.querySelector('#detail-close-btn').onclick = () => { modal.style.display = 'none'; };
+        modal.onclick = (e) => { if (e.target === modal) modal.style.display = 'none'; };
     }
 
-    modal.querySelector('#popup-deck-title').innerText = title;
-    modal.querySelector('#popup-deck-desc').innerText = description;
+    const sinnerObj = typeof sinners !== 'undefined' ? sinners[sinnerIndex] : null;
+    const sinnerName = sinnerObj ? sinnerObj.name : (sinnerIndex + 1) + "번 수감자";
+    
+    let identityName = "장착 인격 없음";
+    if (deck.thumbnails && deck.thumbnails[sinnerIndex] && deck.thumbnails[sinnerIndex].name) {
+        identityName = deck.thumbnails[sinnerIndex].name;
+    }
+
+    modal.querySelector('#detail-modal-title').innerText = sinnerName + " 상세 정보";
+    modal.querySelector('#detail-sinner-identity-name').innerText = "인격: " + identityName;
+
+    const egosContainer = modal.querySelector('#detail-modal-egos');
+    egosContainer.innerHTML = '';
+
+    const gradeSymbols = ['Z', 'T', 'H', 'W', 'A'];
+    const gradeColors = ['#93c5fd', '#86efac', '#fde047', '#fca5a5', '#d8b4fe'];
+    const gradeNames = ['zayin', 'teth', 'he', 'waw', 'aleph'];
+
+    let sinnerEgos = ["-", "-", "-", "-", "-"];
+    if (deck.fixedEgos && sinnerObj && deck.fixedEgos[sinnerObj.id] && deck.fixedEgos[sinnerObj.id].egos) {
+        sinnerEgos = deck.fixedEgos[sinnerObj.id].egos;
+    }
+
+    sinnerEgos.forEach((egoName, idx) => {
+        const egoDiv = document.createElement('div');
+        const isEquipped = egoName && egoName !== '-';
+        
+        egoDiv.className = "ego-list-item grade-" + gradeNames[idx];
+        egoDiv.style.cssText = "background: #151821; border: 1px solid #2a2e3d; border-radius: 4px; padding: 10px; display: flex; align-items: center; gap: 10px;";
+        egoDiv.innerHTML = `
+            <span style="font-weight: bold; width: 24px; text-align: center; color: ${gradeColors[idx]};">${gradeSymbols[idx]}</span>
+            <span style="font-size: 13px; color: ${isEquipped ? '#ffffff' : '#555'};">${egoName}</span>
+        `;
+        egosContainer.appendChild(egoDiv);
+    });
+
     modal.style.display = 'flex';
 }
