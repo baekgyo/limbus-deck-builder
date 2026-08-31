@@ -4,7 +4,7 @@
 const firebaseConfig = {
     apiKey: "AIzaSyAs3HEBMCDVBL4wvap80xcsw6RxbzHBS9Y",
     authDomain: "limbus-deck-builder.firebaseapp.com",
-    projectId: "Limbus-deck-builder",
+    projectId: "limbus-deck-builder",
     storageBucket: "limbus-deck-builder.firebasestorage.app",
     messagingSenderId: "648694504200",
     appId: "1:648694504200:web:6a6611b8023bb8eb31eabd"
@@ -138,6 +138,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (customShareBtn) {
         customShareBtn.onclick = async function() {
             try {
+                alert("저장중...");
+
                 const selectedDifficulty = document.querySelector('input[name="deck-difficulty"]:checked')?.value || 'NORMAL';
                 const title = document.getElementById('custom-deck-title').value.trim() || "제목 없음";
                 const author = document.getElementById('custom-author').value.trim() || "익명";
@@ -151,6 +153,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const deckCode = generateRawBitString();
                 window.fixedEgos = originalFixedEgos;
+
+                const deckIdentities = sinners.map(s => {
+                    const state = customDeckState[s.id];
+                    return state && state.identity ? state.identity : null;
+                });
 
                 const thumbnails = sinners.map(s => {
                     const state = customDeckState[s.id];
@@ -167,19 +174,20 @@ document.addEventListener('DOMContentLoaded', () => {
                     description: description,
                     tags: [selectedDifficulty],
                     deckCode: deckCode,
+                    deckIdentities: deckIdentities,
                     thumbnails: thumbnails,
                     views: 0,
                     date: new Date().toISOString().slice(0, 10).replace(/-/g, '. ') + '.'
                 };
 
                 await db.collection("sharedDecks").add(deckDoc);
-                alert("덱이 성공적으로 파이어베이스에 공유되었습니다!");
+                alert("덱이 성공적으로 공유되었습니다!");
                 copyToClipboard(deckCode);
                 showSection('community-screen');
 
             } catch (e) {
                 console.error("파이어베이스 저장 오류:", e);
-                alert("덱 공유 중 오류가 발생했습니다. 파이어베이스 콘솔 설정을 확인해주세요.");
+                alert("덱 공유 중 오류가 발생했습니다. 에러 내용: " + e.message);
             }
         };
     }
@@ -447,15 +455,79 @@ function setBits(bitArray, start, end, value) {
     }
 }
 
+function generateBitStringFromDeckData(deck) {
+    let totalBits = new Array(560).fill('0');
+
+    sinners.forEach((s, i) => {
+        let startBit = i * 46; 
+        let foundIdentity = null;
+
+        if (deck && deck.deckIdentities && deck.deckIdentities[i]) {
+            foundIdentity = deck.deckIdentities[i];
+        } else if (identities && identities[i]) {
+            foundIdentity = identities[i][0];
+        }
+        
+        let idyNo = foundIdentity ? foundIdentity.no : 1;
+
+        if (idyNo >= 16) {
+            setBits(totalBits, startBit + 3, startBit + 7, idyNo);
+        } else {
+            setBits(totalBits, startBit + 4, startBit + 7, idyNo);
+        }
+
+        setBits(totalBits, startBit + 8, startBit + 11, i + 1);
+        
+        const egoData = typeof sinnerEgoList !== 'undefined' ? sinnerEgoList[i] : null;
+        if (egoData && egoData[0] && egoData[0].length > 0) {
+            setBits(totalBits, startBit + 15, startBit + 18, egoData[0][0].no || 1);
+        }
+    });
+
+    const bitString = totalBits.join("");
+
+    let bytes = new Uint8Array(bitString.length / 8);
+    for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(bitString.substr(i * 8, 8), 2);
+    }
+
+    let binStr1 = '';
+    for (let i = 0; i < bytes.length; i++) {
+        binStr1 += String.fromCharCode(bytes[i]);
+    }
+    let b64_encoded = btoa(binStr1);
+
+    if (typeof pako === 'undefined') {
+        throw new Error("pako 라이브러리가 로드되지 않았습니다.");
+    }
+    let compressor = pako.gzip(b64_encoded);
+
+    let binStr2 = '';
+    for (let i = 0; i < compressor.length; i++) {
+        binStr2 += String.fromCharCode(compressor[i]);
+    }
+    let deck_code = btoa(binStr2);
+
+    return deck_code;
+}
+
 function generateRawBitString() {
     let totalBits = new Array(560).fill('0');
 
     sinners.forEach((s, i) => {
         let startBit = i * 46; 
 
-        const label = document.getElementById(`slot-${s.id}`)?.nextElementSibling;
-        const currentName = label ? label.innerText.trim() : ""; 
-        const foundIdentity = identities[i]?.find(idy => idy.name.trim() === currentName);
+        let foundIdentity = null;
+
+        const isCustomScreen = !document.getElementById('deck-share-screen').classList.contains('hidden');
+
+        if (isCustomScreen && typeof customDeckState !== 'undefined' && customDeckState[s.id] && customDeckState[s.id].identity) {
+            foundIdentity = customDeckState[s.id].identity;
+        } else {
+            const label = document.getElementById(`slot-${s.id}`)?.nextElementSibling;
+            const currentName = label ? label.innerText.trim() : ""; 
+            foundIdentity = identities[i]?.find(idy => idy.name.trim() === currentName);
+        }
         
         let idyNo = foundIdentity ? foundIdentity.no : 1;
 
@@ -812,23 +884,29 @@ function toggleCustomKeywordFilter(kw) {
 }
 
 // -------------------------------------------------------------
-// [8. 공유된 덱 보기(커뮤니티) - 파이어베이스 연동 로직]
 // -------------------------------------------------------------
+// [8. 공유된 덱 보기(커뮤니티) - 페이지네이션 & 조회수 증가 적용 버전]
+// -------------------------------------------------------------
+let currentCommunityPage = 1;
+const decksPerPage = 5; // 한 페이지에 5개씩 표시
+let cachedCommunityDecks = []; 
+
 function loadCommunityDecks() {
     const listContainer = document.getElementById('community-deck-list');
     const statusIndicator = document.getElementById('community-status');
     if (!listContainer) return;
 
-    listContainer.innerHTML = '<div style="text-align: center; color: #71717a; padding: 20px;">파이어베이스에서 공유 덱을 불러오는 중...</div>';
+    listContainer.innerHTML = '<div style="text-align: center; color: #71717a; padding: 20px;">공유 된 덱을 불러오는 중...</div>';
 
     db.collection("sharedDecks").orderBy("date", "desc").get()
         .then((querySnapshot) => {
-            let deckDataArray = [];
+            cachedCommunityDecks = [];
             querySnapshot.forEach((doc) => {
-                deckDataArray.push({ id: doc.id, ...doc.data() });
+                cachedCommunityDecks.push({ id: doc.id, ...doc.data() });
             });
 
-            renderCommunityDecksUI(deckDataArray);
+            currentCommunityPage = 1; 
+            renderCommunityPage();
         })
         .catch((error) => {
             console.error("데이터 로드 실패:", error);
@@ -837,25 +915,55 @@ function loadCommunityDecks() {
         });
 }
 
-function renderCommunityDecksUI(deckDataArray) {
+// 특정 덱의 조회수를 1 증가시키는 함수
+async function incrementDeckView(deckId) {
+    if (!deckId) return;
+    try {
+        const deckRef = db.collection("sharedDecks").doc(deckId);
+        await db.runTransaction(async (transaction) => {
+            const doc = await transaction.get(deckRef);
+            if (!doc.exists) return;
+            const newViews = (doc.data().views || 0) + 1;
+            transaction.update(deckRef, { views: newViews });
+            
+            // 캐시 데이터도 동기화
+            const cached = cachedCommunityDecks.find(d => d.id === deckId);
+            if (cached) cached.views = newViews;
+        });
+    } catch (e) {
+        console.error("조회수 증가 실패:", e);
+    }
+}
+
+function renderCommunityPage() {
     const listContainer = document.getElementById('community-deck-list');
     const statusIndicator = document.getElementById('community-status');
     if (!listContainer) return;
 
     listContainer.innerHTML = '';
 
-    if (!deckDataArray || deckDataArray.length === 0) {
+    if (!cachedCommunityDecks || cachedCommunityDecks.length === 0) {
         listContainer.innerHTML = '<div style="text-align: center; color: #71717a; padding: 20px;">등록된 공유 덱이 없습니다.</div>';
+        if (statusIndicator) statusIndicator.textContent = "등록된 공유 덱 없음";
         return;
     }
 
+    const totalDecks = cachedCommunityDecks.length;
+    const totalPages = Math.ceil(totalDecks / decksPerPage);
+
+    if (currentCommunityPage > totalPages) currentCommunityPage = totalPages;
+    if (currentCommunityPage < 1) currentCommunityPage = 1;
+
+    const startIndex = (currentCommunityPage - 1) * decksPerPage;
+    const endIndex = startIndex + decksPerPage;
+    const decksToDisplay = cachedCommunityDecks.slice(startIndex, endIndex);
+
     if (statusIndicator) {
-        statusIndicator.textContent = `총 ${deckDataArray.length}개의 공유 덱 로드 완료`;
+        statusIndicator.textContent = `총 ${totalDecks}개의 공유 덱 중 ${startIndex + 1} ~ ${Math.min(endIndex, totalDecks)}번째 표시 (페이지 ${currentCommunityPage}/${totalPages})`;
     }
 
-    deckDataArray.forEach(deck => {
+    decksToDisplay.forEach(deck => {
         const card = document.createElement('div');
-        // 부모 카드 스타일: 사진처럼 꽉 차는 레이아웃과 균일한 간격 조정을 위한 flex 설정
         card.style.cssText = `
             display: flex; 
             background-color: #1a1d26; 
@@ -867,7 +975,6 @@ function renderCommunityDecksUI(deckDataArray) {
             align-items: center;
         `;
 
-        // 1. 좌측 정보 영역 (작성자, 제목, 난이도, 조회수, 생성 날짜)
         const leftInfo = document.createElement('div');
         leftInfo.style.cssText = `flex: 0 0 160px; display: flex; flex-direction: column; gap: 3px;`;
         
@@ -880,13 +987,12 @@ function renderCommunityDecksUI(deckDataArray) {
             <div style="display: flex; align-items: center; gap: 4px; font-size: 0.75rem; color: #a1a1aa;"><span>👤</span> <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${deck.author || '익명'}</span></div>
             <div style="font-size: 0.95rem; font-weight: bold; color: #60a5fa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${deck.title || ''}">${deck.title || '제목 없음'}</div>
             <div style="display: flex; gap: 4px; flex-wrap: wrap;">${tagsHtml}</div>
-            <div style="font-size: 0.65rem; color: #71717a; display: flex; gap: 6px; align-items: center; margin-top: 2px;">
+            <div style="font-size: 0.65rem; color: #71717a; display: flex; gap: 6px; align-items: center; margin-top: 2px;" id="view-count-${deck.id}">
                 <span>👁️ ${deck.views || 0}</span>
                 <span>📅 ${deck.date || '2026. 08. 29.'}</span>
             </div>
         `;
 
-        // 2. 가운데 설명 영역 (적당한 고정 폭 유지, 클릭 시 모달 열림)
         const middleDesc = document.createElement('div');
         middleDesc.style.cssText = `
             flex: 0 0 170px; 
@@ -913,7 +1019,6 @@ function renderCommunityDecksUI(deckDataArray) {
             showDescriptionModal(deck.title, deck.description);
         };
 
-        // 3. 우측 12인 인격 카드 영역 (사진처럼 꽉 차고 큼직한 6x2 그리드 형태로 확장)
         const rightThumbnails = document.createElement('div');
         rightThumbnails.style.cssText = `display: grid; grid-template-columns: repeat(6, 1fr); grid-template-rows: repeat(2, 1fr); gap: 6px; flex: 1; align-self: stretch;`;
         
@@ -934,7 +1039,6 @@ function renderCommunityDecksUI(deckDataArray) {
             rightThumbnails.appendChild(cell);
         }
 
-        // 4. 맨 우측 덱 코드 복사 버튼 영역
         const rightAction = document.createElement('div');
         rightAction.style.cssText = `display: flex; align-items: center; flex: 0 0 90px; justify-content: flex-end; flex-shrink: 0;`;
         
@@ -952,11 +1056,38 @@ function renderCommunityDecksUI(deckDataArray) {
             width: 100%;
         `;
         copyBtn.innerText = '코드 복사';
-        copyBtn.onclick = () => {
-            if (deck.deckCode) {
-                copyToClipboard(deck.deckCode);
-            } else {
-                alert("저장된 덱 코드가 없습니다.");
+        
+        copyBtn.onclick = async () => {
+            try {
+                let codeToCopy = "";
+                if (deck.deckIdentities && deck.deckIdentities.length > 0) {
+                    codeToCopy = generateBitStringFromDeckData(deck);
+                } else if (deck.deckCode) {
+                    codeToCopy = deck.deckCode;
+                }
+                
+                if (codeToCopy) {
+                    // 조회수 증가 실행
+                    await incrementDeckView(deck.id);
+                    deck.views = (deck.views || 0) + 1;
+                    
+                    // 화면 상의 조회수 즉시 갱신
+                    const viewCountElem = document.getElementById(`view-count-${deck.id}`);
+                    if (viewCountElem) {
+                        viewCountElem.innerHTML = `<span>👁️ ${deck.views}</span><span>📅 ${deck.date || '2026. 08. 29.'}</span>`;
+                    }
+
+                    copyToClipboard(codeToCopy);
+                } else {
+                    alert("저장된 덱 코드가 없습니다.");
+                }
+            } catch (e) {
+                console.error("커뮤니티 덱 복사 오류:", e);
+                if (deck.deckCode) {
+                    copyToClipboard(deck.deckCode);
+                } else {
+                    alert("코드 복사 중 오류가 발생했습니다.");
+                }
             }
         };
         rightAction.appendChild(copyBtn);
@@ -967,6 +1098,76 @@ function renderCommunityDecksUI(deckDataArray) {
         card.appendChild(rightAction);
         listContainer.appendChild(card);
     });
+
+    if (totalPages > 1) {
+        const paginationContainer = document.createElement('div');
+        paginationContainer.style.cssText = `
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            gap: 6px; 
+            margin-top: 15px; 
+            padding-bottom: 10px;
+        `;
+
+        const prevBtn = document.createElement('button');
+        prevBtn.style.cssText = `background: #27272a; color: #fff; border: 1px solid #3f3f46; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.8rem;`;
+        prevBtn.innerText = '◀ 이전';
+        prevBtn.disabled = currentCommunityPage === 1;
+        if (prevBtn.disabled) prevBtn.style.opacity = '0.4';
+        prevBtn.onclick = () => {
+            if (currentCommunityPage > 1) {
+                currentCommunityPage--;
+                renderCommunityPage();
+                listContainer.scrollTop = 0;
+            }
+        };
+        paginationContainer.appendChild(prevBtn);
+
+        let startPage = Math.max(1, currentCommunityPage - 2);
+        let endPage = Math.min(totalPages, startPage + 4);
+        if (endPage - startPage < 4) {
+            startPage = Math.max(1, endPage - 4);
+        }
+
+        for (let p = startPage; p <= endPage; p++) {
+            const pageBtn = document.createElement('button');
+            const isCurrent = p === currentCommunityPage;
+            pageBtn.style.cssText = `
+                background: ${isCurrent ? '#2563eb' : '#27272a'}; 
+                color: #fff; 
+                border: 1px solid ${isCurrent ? '#3b82f6' : '#3f3f46'}; 
+                padding: 6px 10px; 
+                border-radius: 4px; 
+                cursor: pointer; 
+                font-size: 0.8rem;
+                font-weight: ${isCurrent ? 'bold' : 'normal'};
+            `;
+            pageBtn.innerText = p;
+            pageBtn.onclick = () => {
+                currentCommunityPage = p;
+                renderCommunityPage();
+                listContainer.scrollTop = 0;
+            };
+            paginationContainer.appendChild(pageBtn);
+        }
+
+        const nextBtn = document.createElement('button');
+        nextBtn.style.cssText = `background: #27272a; color: #fff; border: 1px solid #3f3f46; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.8rem;`;
+        nextBtn.innerText = '다음 ▶';
+        nextBtn.disabled = currentCommunityPage === totalPages;
+        if (nextBtn.disabled) nextBtn.style.opacity = '0.4';
+        nextBtn.onclick = () => {
+            if (currentCommunityPage < totalPages) {
+                currentCommunityPage++;
+                renderCommunityPage();
+                listContainer.scrollTop = 0;
+            }
+        };
+        paginationContainer.appendChild(nextBtn);
+
+        listContainer.appendChild(paginationContainer);
+    }
 }
 
 function showDescriptionModal(title, description) {
